@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 
-# Configuración de URLs del backend
+# URL del backend para subir imágenes
 API_IMAGENES_URL = "http://localhost:5000/imagenes"
 
 # Estado de sesión para manejar el token
@@ -13,7 +13,6 @@ if "token" not in st.session_state:
 # ==========================================
 st.sidebar.title("Autenticación")
 
-# Verificar si ya hay un token guardado
 if st.session_state.token:
     st.sidebar.success("Ya has iniciado sesión.")
     if st.sidebar.button("Cerrar Sesión"):
@@ -34,6 +33,26 @@ if not st.session_state.token:
 headers = {"Authorization": f"Bearer {st.session_state.token}"}
 
 # ==========================================
+# 🌍 Función para obtener geolocalización por IP
+# ==========================================
+def obtener_ubicacion_por_ip():
+    try:
+        response = requests.get("https://ipinfo.io/json")
+        data = response.json()
+        if "loc" in data:
+            lat, lon = data["loc"].split(",")
+            return lat, lon
+    except:
+        return None, None
+    return None, None
+
+# Obtener coordenadas al cargar
+if "latitud" not in st.session_state or "longitud" not in st.session_state:
+    latitud, longitud = obtener_ubicacion_por_ip()
+    st.session_state.latitud = latitud
+    st.session_state.longitud = longitud
+
+# ==========================================
 # 🚀 OPCIONES
 # ==========================================
 opcion = st.sidebar.selectbox("Selecciona una opción", ["Listar Imágenes", "Subir Imagen"])
@@ -52,9 +71,7 @@ if opcion == "Listar Imágenes":
                 st.write(f"👤 **Usuario ID:** {imagen['usuario_id']}")
                 st.write(f"📅 **Fecha:** {imagen['fecha']}")
                 st.write(f"🌎 **Coordenadas:** Latitud {imagen['coordenadas']['latitud']}, Longitud {imagen['coordenadas']['longitud']}")
-                
-                # Mostrar imagen
-                st.image(imagen['url'], caption=imagen['url'], use_column_width=True)
+                st.image(imagen['url'], caption=imagen['url'], use_container_width=True)
                 st.divider()
         else:
             st.error(data.get("message", "Error al obtener las imágenes"))
@@ -66,25 +83,36 @@ if opcion == "Listar Imágenes":
 # ==========================================
 elif opcion == "Subir Imagen":
     st.title("Subir Imagen")
+
     with st.form("form_imagen"):
-        usuario_id = st.text_input("Usuario ID (opcional)")
-        url = st.text_input("URL de la Imagen")
-        latitud = st.text_input("Latitud")
-        longitud = st.text_input("Longitud")
+        imagen_file = st.file_uploader("Selecciona una imagen", type=["jpg", "jpeg", "png"])
+        url = st.text_input("URL de la Imagen (p. ej., S3 o ruta pública)")
+        latitud = st.text_input("Latitud", value=st.session_state.latitud or "")
+        longitud = st.text_input("Longitud", value=st.session_state.longitud or "")
         submit = st.form_submit_button("Subir Imagen")
 
     if submit:
         if not url or not latitud or not longitud:
             st.error("La URL de la imagen y las coordenadas son obligatorias.")
         else:
+            # Extraer usuario_id del token decodificado
+            import jwt
+            try:
+                decoded = jwt.decode(st.session_state.token, options={"verify_signature": False})
+                usuario_id = decoded.get("usuario_id") or decoded.get("id")
+            except Exception as e:
+                st.error("No se pudo extraer el usuario del token.")
+                st.stop()
+
             payload = {
-                "usuario_id": usuario_id if usuario_id else None,
+                "usuario_id": usuario_id,
                 "url": url,
                 "coordenadas": {
                     "latitud": latitud,
                     "longitud": longitud
                 }
             }
+
             try:
                 response = requests.post(API_IMAGENES_URL, json=payload, headers=headers)
                 data = response.json()

@@ -51,6 +51,7 @@ def token_required(f):
 # Endpoint de login (sin protección, ya que se utiliza para obtener el token)
 @app.route('/login', methods=['POST'])
 def login():
+    print("ESTA LLENGANDO LA CONSULTA")
     data = request.get_json()
     if not data or 'email' not in data or 'contrasena' not in data:
         return jsonify({'success': False, 'message': 'Faltan datos en la solicitud'}), 400
@@ -124,6 +125,7 @@ def listar_usuarios():
     all_users = usuarios.find()
     users_list = [
         {
+            'id': str(user['_id']),  # 👈 Agregué esta línea para incluir el ID
             'nombre': user.get('nombre'),
             'apellido_pat': user.get('apellido_pat'),
             'apellido_mat': user.get('apellido_mat'),
@@ -132,6 +134,63 @@ def listar_usuarios():
     ]
     return jsonify({'success': True, 'usuarios': users_list})
 
+# Endpoint para eliminar un usuario (protegido)
+@app.route('/usuarios/<string:usuario_id>', methods=['DELETE'])
+@token_required
+def eliminar_usuario(usuario_id):
+    result = usuarios.delete_one({'_id': ObjectId(usuario_id)})
+    
+    if result.deleted_count > 0:
+        return jsonify({'success': True, 'message': 'Usuario eliminado correctamente'}), 200
+    else:
+        return jsonify({'success': False, 'message': 'Usuario no encontrado'}), 404
+
+
+# Endpoint para eliminar un usuario por correo electrónico (protegido)
+@app.route('/usuarios/email/<string:email>', methods=['DELETE'])
+@token_required
+def eliminar_usuario_por_email(email):
+    result = usuarios.delete_one({'email': email})
+    
+    if result.deleted_count > 0:
+        return jsonify({'success': True, 'message': f'Usuario con email {email} eliminado correctamente'}), 200
+    else:
+        return jsonify({'success': False, 'message': 'Usuario no encontrado'}), 404
+    
+# Endpoint para editar usuario por correo electrónico (protegido)
+@app.route('/usuarios/email/<string:email>', methods=['PUT'])
+@token_required
+def editar_usuario_por_email(email):
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': 'No se enviaron datos para actualizar'}), 400
+
+    # Construir un diccionario con los campos a actualizar, solo si están presentes
+    campos_actualizables = ['nombre', 'apellido_pat', 'apellido_mat', 'direccion', 'contrasena']
+    campos_limpios = {}
+
+    for campo in campos_actualizables:
+        if campo in data:
+            campos_limpios[campo] = bleach.clean(data[campo])
+
+    if not campos_limpios:
+        return jsonify({'success': False, 'message': 'No se proporcionaron campos válidos para actualizar'}), 400
+
+    # Actualizar el campo "fecha_ultima_modificacion"
+    campos_limpios['gestion_cuenta.fecha_ultima_modificacion'] = datetime.utcnow()
+
+    result = usuarios.update_one(
+        {'email': email},
+        {'$set': campos_limpios}
+    )
+
+    if result.matched_count == 0:
+        return jsonify({'success': False, 'message': 'Usuario no encontrado'}), 404
+
+    return jsonify({'success': True, 'message': 'Usuario actualizado correctamente'}), 200
+
+
+
 # Endpoint para cerrar sesión (protegido)
 @app.route('/logout', methods=['GET'])
 @token_required
@@ -139,13 +198,13 @@ def logout():
     session.pop('username', None)
     return jsonify({'success': True, 'message': 'Sesión cerrada correctamente'})
 
-if __name__ == '__main__':
-    app.run(debug=True)
+
 
 # Endpoint para listar tratamientos (protegido)
 @app.route('/tratamientos', methods=['GET'])
 @token_required
 def listar_tratamientos():
+    print("ESTA LLENGANDO LA CONSULTA")
     all_tratamientos = db['tratamientos'].find()
     tratamientos_list = [
         {
@@ -205,3 +264,137 @@ def agregar_categoria_enfermedad():
     }
     result = db['categorias_de_enfermedades'].insert_one(nueva_categoria)
     return jsonify({'success': True, 'id': str(result.inserted_id)}), 201
+
+#Endpoint para listar enfermedades (protegido)
+@app.route('/enfermedades', methods=['GET'])
+@token_required
+def listar_enfermedades():
+    all_enfermedades = db['enfermedades'].find()
+    enfermedades_list = [
+        {
+            'id': str(enfermedad['_id']),
+            'nombre': enfermedad['nombre'],
+            'descripcion': enfermedad['descripcion']
+        } for enfermedad in all_enfermedades
+    ]
+    return jsonify({'success': True, 'enfermedades': enfermedades_list})
+
+# Endpoint para agregar una nueva enfermedad (protegido)
+@app.route('/enfermedades', methods=['POST'])
+@token_required
+def agregar_enfermedad():
+    data = request.get_json()
+    if not data or 'nombre' not in data or 'descripcion' not in data:
+        return jsonify({'success': False, 'message': 'Faltan datos en la solicitud'}), 400
+
+    nueva_enfermedad = {
+        'nombre': bleach.clean(data['nombre']),
+        'descripcion': bleach.clean(data['descripcion'])
+    }
+    result = db['enfermedades'].insert_one(nueva_enfermedad)
+    return jsonify({'success': True, 'id': str(result.inserted_id)}), 201
+
+# Endpoint para listar diagnósticos (protegido)
+@app.route('/diagnosticos', methods=['GET'])
+@token_required
+def listar_diagnosticos():
+    all_diagnosticos = db['diagnosticos'].find()
+    diagnosticos_list = [
+        {
+            'id': str(diagnostico['_id']),
+            'usuario_id': str(diagnostico['usuario_id']) if diagnostico['usuario_id'] else None,
+            'imagen_id': str(diagnostico['imagen_id']),
+            'enfermedad_id': str(diagnostico['enfermedad_id']),
+            'fecha_hora': diagnostico['fecha_hora']
+        } for diagnostico in all_diagnosticos
+    ]
+    return jsonify({'success': True, 'diagnosticos': diagnosticos_list})
+
+# Endpoint para crear un nuevo diagnóstico (protegido)
+@app.route('/diagnosticos', methods=['POST'])
+@token_required
+def crear_diagnostico():
+    data = request.get_json()
+    if not data or 'imagen_id' not in data or 'enfermedad_id' not in data:
+        return jsonify({'success': False, 'message': 'Faltan datos en la solicitud'}), 400
+
+    nuevo_diagnostico = {
+        'usuario_id': data.get('usuario_id'),
+        'imagen_id': data['imagen_id'],
+        'enfermedad_id': data['enfermedad_id'],
+        'fecha_hora': datetime.utcnow()
+    }
+    result = db['diagnosticos'].insert_one(nuevo_diagnostico)
+    return jsonify({'success': True, 'id': str(result.inserted_id)}), 201
+
+# Endpoint para listar imágenes (protegido)
+@app.route('/imagenes', methods=['GET'])
+@token_required
+def listar_imagenes():
+    all_imagenes = db['imagenes'].find()
+    imagenes_list = [
+        {
+            'id': str(imagen['_id']),
+            'usuario_id': str(imagen['usuario_id']) if imagen['usuario_id'] else None,
+            'url': imagen['url'],
+            'fecha': imagen['fecha'],
+            'coordenadas': imagen['coordenadas']
+        } for imagen in all_imagenes
+    ]
+    return jsonify({'success': True, 'imagenes': imagenes_list})
+
+# Endpoint para subir una nueva imagen (protegido)
+@app.route('/imagenes', methods=['POST'])
+@token_required
+def subir_imagen():
+    data = request.get_json()
+    if not data or 'url' not in data or 'coordenadas' not in data:
+        return jsonify({'success': False, 'message': 'Faltan datos en la solicitud'}), 400
+
+    nueva_imagen = {
+        'usuario_id': data.get('usuario_id'),
+        'url': bleach.clean(data['url']),
+        'fecha': datetime.utcnow(),
+        'coordenadas': {
+            'latitud': data['coordenadas']['latitud'],
+            'longitud': data['coordenadas']['longitud']
+        }
+    }
+    result = db['imagenes'].insert_one(nueva_imagen)
+    return jsonify({'success': True, 'id': str(result.inserted_id)}), 201
+
+# Endpoint para listar reseñas (protegido)
+@app.route('/reseñas', methods=['GET'])
+@token_required
+def listar_reseñas():
+    all_reseñas = db['reseñas'].find()
+    reseñas_list = [
+        {
+            'id': str(reseña['_id']),
+            'id_tratamiento': str(reseña['id_tratamiento']),
+            'id_enfermedad': str(reseña['id_enfermedad']),
+            'opinion': reseña['opinion'],
+            'calificacion': reseña['calificacion']
+        } for reseña in all_reseñas
+    ]
+    return jsonify({'success': True, 'reseñas': reseñas_list})
+
+# Endpoint para agregar una nueva reseña (protegido)
+@app.route('/reseñas', methods=['POST'])
+@token_required
+def agregar_reseña():
+    data = request.get_json()
+    if not data or 'id_tratamiento' not in data or 'id_enfermedad' not in data or 'opinion' not in data or 'calificacion' not in data:
+        return jsonify({'success': False, 'message': 'Faltan datos en la solicitud'}), 400
+
+    nueva_reseña = {
+        'id_tratamiento': data['id_tratamiento'],
+        'id_enfermedad': data['id_enfermedad'],
+        'opinion': bleach.clean(data['opinion']),
+        'calificacion': data['calificacion']
+    }
+    result = db['reseñas'].insert_one(nueva_reseña)
+    return jsonify({'success': True, 'id': str(result.inserted_id)}), 201
+
+if __name__ == '__main__':
+    app.run(debug=True)
